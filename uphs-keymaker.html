@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>UPHS Keymaker</title>
+<style>
+:root{--bg:#eef1f5;--ink:#14213d;--mute:#5b6577;--line:#cdd5e0;--card:#fff;--ok:#1f6f5c;--bad:#b3261e}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1624;--ink:#e8edf6;--mute:#9aa5b8;--line:#2a3550;--card:#17203a;--ok:#5fd0b0;--bad:#ff8a80}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif}
+main{max-width:620px;margin:0 auto;padding:24px 16px 48px}
+h1{font:700 30px/1.2 Georgia,serif;margin:8px 0 4px}
+h2{font:600 18px Georgia,serif;margin:0 0 12px}
+.sub{color:var(--mute);margin:0 0 24px}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:16px}
+label{display:block;font-weight:600;margin:12px 0 4px}
+input,textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:6px;background:transparent;color:inherit;font:inherit}
+textarea{font:13px/1.4 ui-monospace,monospace;min-height:110px;word-break:break-all}
+small{color:var(--mute)}
+.row{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+button,.btn{background:var(--ink);color:var(--bg);border:0;border-radius:6px;padding:10px 14px;font:600 15px system-ui;cursor:pointer}
+button.ghost,.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid var(--ok);outline-offset:2px}
+#st{font-weight:600}.ok{color:var(--ok)}.bad{color:var(--bad)}
+</style></head><body><main>
+<h1>UPHS Keymaker</h1>
+<p class="sub">Private tool. Keep this file on your own computer. Never upload it or share your signing key.</p>
+
+<section>
+<h2>Signing key</h2>
+<p id="st"></p>
+<div class="row">
+<button id="gen">Generate new signing key</button>
+<button id="bk" class="ghost">Back up key</button>
+<label class="btn ghost" style="margin:0">Restore backup<input type="file" id="rs" accept=".json" hidden></label>
+</div>
+<p><small>Generating a new key makes all old license keys stop working. Back it up first and keep the backup safe.</small></p>
+<div class="row"><button id="cpub" class="ghost">Copy public key for the app</button></div>
+</section>
+
+<section>
+<h2>Make a license key</h2>
+<label for="nm">School or customer name</label><input id="nm" placeholder="Universal Public High School">
+<label for="ex">Expiry date</label><input id="ex" type="date"><small>Leave empty for a lifetime license.</small>
+<label for="dv">Device ID</label><input id="dv" placeholder="Optional"><small>Leave empty to work on any device. Or paste the ID shown on the app's activation screen to lock the key to that device.</small>
+<div class="row"><button id="mk">Make license key</button></div>
+</section>
+
+<section id="outs" hidden>
+<h2>License key</h2>
+<textarea id="out" readonly></textarea>
+<div class="row"><button id="cp">Copy key</button></div>
+</section>
+
+<script>
+const $=id=>document.getElementById(id);
+const A="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const EC={name:"ECDSA",namedCurve:"P-256"},SG={name:"ECDSA",hash:"SHA-256"};
+let priv=null,pubJwk=null;
+
+function b32(u){let bits=0,v=0,o="";for(const x of u){v=(v<<8)|x;bits+=8;while(bits>=5){o+=A[(v>>>(bits-5))&31];bits-=5}v&=(1<<bits)-1}if(bits)o+=A[(v<<(5-bits))&31];return o}
+function status(){const s=$("st");s.className=priv?"ok":"bad";s.textContent=priv?"Signing key loaded.":"No signing key yet. Generate one or restore a backup."}
+async function use(o){priv=await crypto.subtle.importKey("jwk",o.priv,EC,false,["sign"]);pubJwk=o.pub;try{localStorage.setItem("uphs_signing",JSON.stringify(o))}catch(e){}status()}
+
+$("gen").onclick=async()=>{
+  if(priv&&!confirm("Replace the current key? Existing license keys will stop working."))return;
+  const k=await crypto.subtle.generateKey(EC,true,["sign","verify"]);
+  await use({priv:await crypto.subtle.exportKey("jwk",k.privateKey),pub:await crypto.subtle.exportKey("jwk",k.publicKey)});
+};
+$("bk").onclick=()=>{
+  const s=localStorage.getItem("uphs_signing");if(!s)return alert("No key to back up.");
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([s],{type:"application/json"}));a.download="uphs-signing-key-BACKUP.json";a.click();
+};
+$("rs").onchange=async e=>{
+  try{await use(JSON.parse(await e.target.files[0].text()))}catch(x){alert("That file is not a valid backup.")}
+};
+$("cpub").onclick=async()=>{
+  if(!pubJwk)return alert("Generate a signing key first.");
+  const p={kty:pubJwk.kty,crv:pubJwk.crv,x:pubJwk.x,y:pubJwk.y};
+  await navigator.clipboard.writeText("window.UPHS_PUBLIC_KEY = "+JSON.stringify(p)+";");
+  $("cpub").textContent="Copied. Paste it into pubkey.js";
+};
+$("mk").onclick=async()=>{
+  if(!priv)return alert("Generate or restore a signing key first.");
+  const clean=s=>s.replace(/\|/g," ").trim();
+  const name=clean($("nm").value);if(!name)return alert("Enter a school or customer name.");
+  const exp=$("ex").value?$("ex").value.replaceAll("-",""):"0";
+  const data=new TextEncoder().encode(["1",name,exp,clean($("dv").value).toUpperCase()].join("|"));
+  const sig=new Uint8Array(await crypto.subtle.sign(SG,priv,data));
+  const out=new Uint8Array(2+data.length+64);
+  out[0]=data.length>>8;out[1]=data.length&255;out.set(data,2);out.set(sig,2+data.length);
+  $("out").value=b32(out).match(/.{1,5}/g).join("-");
+  $("outs").hidden=false;$("cp").textContent="Copy key";
+};
+$("cp").onclick=async()=>{await navigator.clipboard.writeText($("out").value);$("cp").textContent="Copied"};
+
+try{const s=localStorage.getItem("uphs_signing");if(s)use(JSON.parse(s));else status()}catch(e){status()}
+</script></main></body></html>
